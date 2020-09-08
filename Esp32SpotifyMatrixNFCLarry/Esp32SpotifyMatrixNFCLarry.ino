@@ -10,21 +10,21 @@
     Use the getRefreshToken example to get it.
 
     Parts:
-    ESP32 D1 Mini stlye Dev board 
+    ESP32 D1 Mini stlye Dev board
         - Aliexpress*: http://s.click.aliexpress.com/e/C6ds4my
         - Amazon.com*: https://amzn.to/3gArkAY
         - Also available as an add-on with my Matrix Shield
-        
-    ESP32 I2S Matrix Shield 
+
+    ESP32 I2S Matrix Shield
         - My Tindie: https://www.tindie.com/products/brianlough/esp32-i2s-matrix-shield/
-    
+
     64 x 64 RGB LED Matrix
         - Aliexpress*: https://s.click.aliexpress.com/e/_BfjY0wfp
-    
-    PN532 NFC Module 
+
+    PN532 NFC Module
         - Aliexpress*: https://s.click.aliexpress.com/e/_d7p8MoK
-        - Amazon.co.uk*: https://amzn.to/2DnfvzY  
-    
+        - Amazon.co.uk*: https://amzn.to/2DnfvzY
+
 
  *  * = Affilate
 
@@ -79,11 +79,11 @@
 // Search for "Arduino Json" in the Arduino Library manager
 // https://github.com/bblanchon/ArduinoJson
 
-#include <TJpg_Decoder.h>
+#include <JPEGDEC.h>
 // Library for decoding Jpegs from the API responses
 
-// Search for "tjpg" in the Arduino Library manager
-// https://github.com/Bodmer/TJpg_Decoder
+// Search for "JPEGDEC" in the Arduino Library manager
+// https://github.com/bitbank2/JPEGDEC/
 
 #include <NfcAdapter.h>
 #include <PN532/PN532/PN532.h>
@@ -139,6 +139,8 @@ ArduinoSpotify spotify(client, clientId, clientSecret, SPOTIFY_REFRESH_TOKEN);
 PN532_SPI pn532spi(SPI, NFC_SS, NFC_SCLK, NFC_MISO, NFC_MOSI);
 NfcAdapter nfc = NfcAdapter(pn532spi);
 
+JPEGDEC jpeg;
+
 // You might want to make this much smaller, so it will update responsively
 
 unsigned long delayBetweenRequests = 5000; // Time between requests (5 seconds)
@@ -152,15 +154,12 @@ RGB64x32MatrixPanel_I2S_DMA dma_display;
 // This next function will be called during decoding of the jpeg file to
 // render each block to the Matrix.  If you use a different display
 // you will need to adapt this function to suit.
-bool displayOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap)
+void JPEGDraw(JPEGDRAW *pDraw)
 {
   // Stop further decoding as image is running off bottom of screen
-  if ( y >= dma_display.height() ) return 0;
+  if (  pDraw->y >= dma_display.height() ) return;
 
-  dma_display.drawRGBBitmap(x, y, bitmap, w, h);
-
-  // Return 1 to decode next block
-  return 1;
+  dma_display.drawRGBBitmap(pDraw->x, pDraw->y, pDraw->pPixels, pDraw->iWidth, pDraw->iHeight);
 }
 
 void setup() {
@@ -168,7 +167,7 @@ void setup() {
   Serial.begin(115200);
 
   // Initialise SPIFFS, if this fails try .begin(true)
-  if (!SPIFFS.begin(true)) {
+  if (!SPIFFS.begin()) {
     Serial.println("SPIFFS initialisation failed!");
     while (1) yield(); // Stay here twiddling thumbs waiting
   }
@@ -183,15 +182,6 @@ void setup() {
 
   dma_display.begin();
   dma_display.fillScreen(dma_display.color565(0, 0, 0));
-
-  // The jpeg image can be scaled by a factor of 1, 2, 4, or 8
-  TJpgDec.setJpgScale(1);
-
-  // The decoder must be given the exact name of the rendering function above
-  TJpgDec.setCallback(displayOutput);
-
-  // The byte order can be swapped (set true for TFT_eSPI)
-  //TJpgDec.setSwapBytes(true);
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
@@ -217,6 +207,26 @@ void setup() {
     Serial.println("Failed to get access tokens");
   }
 }
+
+fs::File myfile;
+
+void * myOpen(const char *filename, int32_t *size) {
+  myfile = SPIFFS.open(filename);
+  *size = myfile.size();
+  return &myfile;
+}
+void myClose(void *handle) {
+  if (myfile) myfile.close();
+}
+int32_t myRead(JPEGFILE *handle, uint8_t *buffer, int32_t length) {
+  if (!myfile) return 0;
+  return myfile.read(buffer, length);
+}
+int32_t mySeek(JPEGFILE *handle, int32_t position) {
+  if (!myfile) return 0;
+  return myfile.seek(position);
+}
+
 int displayImage(char *albumArtUrl) {
 
   // In this example I reuse the same filename
@@ -236,7 +246,9 @@ int displayImage(char *albumArtUrl) {
   }
 
   unsigned long lTime = millis();
+
   bool gotImage = spotify.getImage(albumArtUrl, &f);
+
   Serial.print("Time taken to get Image (ms): ");
   Serial.println(millis() - lTime);
 
@@ -245,10 +257,12 @@ int displayImage(char *albumArtUrl) {
 
   if (gotImage) {
     lTime = millis();
-    int returnStatus = TJpgDec.drawFsJpg(0, 0, ALBUM_ART);
+    jpeg.open((char *)ALBUM_ART, myOpen, myClose, myRead, mySeek, JPEGDraw);
+    jpeg.decode(0, 0, 0);
+    jpeg.close();
     Serial.print("Time taken to decode and display Image (ms): ");
     Serial.println(millis() - lTime);
-    return returnStatus;
+    return 0;
   } else {
     return -2;
   }
@@ -335,7 +349,7 @@ bool updateSpotify(char *tagContent) {
     Serial.println(track);
 
     sprintf(body, "{\"context_uri\" : \"%s\", \"offset\": {\"uri\": \"%s\"}}", context, track);
-    
+
   } else {
     char *isTrack = NULL;
     isTrack = strstr (tagContent, "track");
@@ -356,7 +370,7 @@ bool updateSpotify(char *tagContent) {
   }
 }
 
-void markDisplayAsTagRead(){
+void markDisplayAsTagRead() {
   dma_display.drawRect(1, 1, dma_display.width() - 2, dma_display.height() - 2, dma_display.color444(0, 0, 255));
   dma_display.drawRect(2, 2, dma_display.width() - 4, dma_display.height() - 4, dma_display.color444(255, 0, 0));
 }
@@ -449,9 +463,11 @@ void loop() {
           Serial.print("failed to display image: ");
           Serial.println(displayImageResult);
         }
-      } else if(refreshArt){
+      } else if (refreshArt) {
         refreshArt = false;
-        TJpgDec.drawFsJpg(0, 0, ALBUM_ART);
+        jpeg.open((char *)ALBUM_ART, myOpen, myClose, myRead, mySeek, JPEGDraw);
+        jpeg.decode(0, 0, 0);
+        jpeg.close();
       }
     }
 
